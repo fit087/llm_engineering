@@ -13,7 +13,7 @@ We'll now bring together what we've learned to make an AI Customer Support assis
 
 # Commented out IPython magic to ensure Python compatibility.
 # %%capture
-# %pip install gradio
+# %pip install gradio anthropic
 
 # imports
 
@@ -52,6 +52,21 @@ MODEL = models[model_selection]
 # MODEL = "grok-2-latest"
 # openai = OpenAI(api_key=openai_api_key)  # base_url="https://api.x.ai/v1",
 openai = OpenAI(**configs[model_selection])  # base_url="https://api.x.ai/v1",
+
+import anthropic
+
+client = anthropic.Anthropic(
+    # defaults to os.environ.get("ANTHROPIC_API_KEY")
+    api_key=anthropic_api_key,
+)
+message = client.messages.create(
+    model="claude-3-7-sonnet-20250219",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello, Claude"}
+    ]
+)
+print(message.content[0].text)
 
 system_message = "You are a helpful assistant for an Airline called FlightAI. "
 system_message += "Give short, courteous answers, no more than 1 sentence. "
@@ -134,14 +149,16 @@ def put_reservation(destination_city, travel_data, passangers, name, email):
       if datet > today:
         return f"{name} <{email}>, you have booked {passangers} tickets to {city} on {datet}"
       else:
-        return f"Today is {today} so {datet} is not a valid date"
+        return f"Today is {today} so {datet} is not a valid date. You should choose other date. Restart booking process"
     else:
       return f"Sorry, we don't sell tickets to {city}"
 
 # put_reservation('London', '03/05/2025', 3, 'Beatriz', 'bea@gmail.com') # MRV. VME capacidad de aumentar carga   09, 18, 27 prograssão de Carga:
 
 # put_reservation('London', '20/05/2025', 3, 'Beatriz', 'bea@gmail.com')
-put_reservation('London', '2025-05-20', 3, 'Beatriz', 'bea@gmail.com')
+# put_reservation('London', '2025-05-20', 3, 'Beatriz', 'bea@gmail.com')
+
+put_reservation('London', '2025-04-02', 3, 'Beatriz', 'bea@gmail.com')
 
 # There's a particular dictionary structure that's required to describe our function:
 
@@ -356,34 +373,261 @@ json.loads(tool_call.function.arguments)
 
 response.choices[0].message
 
-def chat(message, history):
-    messages = [{"role": "system", "content": system_message}] + history + [{"role": "user", "content": message}]
-    response = openai.chat.completions.create(model=MODEL, messages=messages, tools=tools)
+# def chat(message, history):
+#     messages = [{"role": "system", "content": system_message}] + history + [{"role": "user", "content": message}]
+#     response = openai.chat.completions.create(model=MODEL, messages=messages, tools=tools)
 
-    if response.choices[0].finish_reason=="tool_calls":
-        message = response.choices[0].message
-        response, city = handle_tool_call(message)
-        messages.append(message)
-        messages.append(response)
-        response = openai.chat.completions.create(model=MODEL, messages=messages)
+#     if response.choices[0].finish_reason=="tool_calls":
+#         message = response.choices[0].message
+#         response, city = handle_tool_call(message)
+#         messages.append(message)
+#         messages.append(response)
+#         response = openai.chat.completions.create(model=MODEL, messages=messages)
 
-    return response.choices[0].message.content
+#     return response.choices[0].message.content
 
 # We have to write that function handle_tool_call:
 
 def handle_tool_call(message):
     tool_call = message.tool_calls[0]
     arguments = json.loads(tool_call.function.arguments)
-    city = arguments.get('destination_city')
-    price = get_ticket_price(city)
-    response = {
-        "role": "tool",
-        "content": json.dumps({"destination_city": city,"price": price}),
-        "tool_call_id": tool_call.id
-    }
-    return response, city
+    # city = arguments.get('destination_city')
+    # price = get_ticket_price(city)
+    funct_pointer = eval(tool_call.function.name)
+    output = funct_pointer(**arguments)
 
-gr.ChatInterface(fn=chat, type="messages").launch()
+    resposta = json.dumps(arguments) + json.dumps({'output': output})
+
+    response = {
+    "role": "tool",
+    "content": resposta,    # convert a python dictionary to a json object string?
+    "tool_call_id": tool_call.id
+}
+    # response = {
+    #     "role": "tool",
+    #     "content": json.dumps({"destination_city": city,"price": price}),
+    #     "tool_call_id": tool_call.id
+    # }
+    return response, arguments
+
+def chat(message, history):
+    messages = [{"role": "system", "content": system_message}] + history + [{"role": "user", "content": message}]
+    response = openai.chat.completions.create(model=MODEL, messages=messages, tools=tools)
+
+    if response.choices[0].finish_reason=="tool_calls":
+        message = response.choices[0].message
+        messages.append(message)
+
+        response, arguments = handle_tool_call(message)
+
+        messages.append(response)
+        response = openai.chat.completions.create(model=MODEL, messages=messages)
+
+    return response.choices[0].message.content
+
+# # We have to write that function handle_tool_call:
+
+# def handle_tool_call(message):
+#     tool_call = message.tool_calls[0]
+#     arguments = json.loads(tool_call.function.arguments)
+#     city = arguments.get('destination_city')
+#     price = get_ticket_price(city)
+#     response = {
+#         "role": "tool",
+#         "content": json.dumps({"destination_city": city,"price": price}),
+#         "tool_call_id": tool_call.id
+#     }
+#     return response, city
+
+gr.ChatInterface(fn=chat, type="messages").launch(debug=True)
+
+"""## Translation"""
+
+def translate(text):
+    # system = {"role": "system", "content": "You are a helpful assistant that translates English to Italian."}
+    # system = "You are a helpful assistant that translates text to Italian."
+    system = "Your only task is to translates text to Italian. No add any other text beside the translated text"
+    messages = [{"role": "user", "content": text}]
+    response = client.messages.create(model="claude-3-7-sonnet-20250219", max_tokens=1024, messages=messages, system=system)
+    return response.content[0].text
+
+
+
+# message = client.messages.create(
+#   model="claude-3-7-sonnet-20250219",
+#   max_tokens=1024,
+#   messages=[
+#       {"role": "user", "content": "Hello, Claude"}
+#   ]
+# )
+# print(message.content)
+
+translate("How are you?")
+
+# We have to write that function handle_tool_call:
+
+def handle_tool_call(message):
+    tool_call = message.tool_calls[0]
+    arguments = json.loads(tool_call.function.arguments)
+    # city = arguments.get('destination_city')
+    # price = get_ticket_price(city)
+    funct_pointer = eval(tool_call.function.name)
+    output = funct_pointer(**arguments)
+
+    resposta = json.dumps(arguments) + json.dumps({'output': output})
+
+    response = {
+    "role": "tool",
+    "content": resposta,    # convert a python dictionary to a json object string?
+    "tool_call_id": tool_call.id
+}
+    # response = {
+    #     "role": "tool",
+    #     "content": json.dumps({"destination_city": city,"price": price}),
+    #     "tool_call_id": tool_call.id
+    # }
+    return response, arguments
+
+def chat_translation(message, history):
+    messages = [{"role": "system", "content": system_message}] + history + [{"role": "user", "content": message}]
+    response = openai.chat.completions.create(model=MODEL, messages=messages, tools=tools)
+
+    if response.choices[0].finish_reason=="tool_calls":
+        message = response.choices[0].message
+        messages.append(message)
+
+        response, arguments = handle_tool_call(message)
+
+        messages.append(response)
+        response = openai.chat.completions.create(model=MODEL, messages=messages)
+
+    # [{'role': 'user', 'metadata': None, 'content': 'hola', 'options': None},
+    #  {'role': 'assistant', 'metadata': None, 'content': 'Hello! How can I assist you with your travel plans today?', 'options': None}]
+
+    print(history)
+    # hist = [texto['content'] for texto in history]
+    # hist = [texto['content'] for texto in messages]
+    hist = [texto['content'] for texto in history + [{"role": "user", "content": message}]]
+    print(hist)
+    hist.append(response.choices[0].message.content)
+    hist_text = "\n".join(hist)
+    print("Historico entero")
+    print(hist_text)
+
+    # return response.choices[0].message.content, translate(response.choices[0].message.content)
+    return response.choices[0].message.content, translate(hist_text)
+    # return response.choices[0].message.content, response.choices[0].message.content
+
+with gr.Blocks() as demo:
+    # code = gr.Code(render=False)
+    translation = gr.Textbox(label="Translation", lines=20, render=False)
+    # translation.submit(translate)
+    with gr.Row():
+        with gr.Column():
+            gr.Markdown("<center><h1>ChatInterface</h1></center>")
+            chatbox = gr.ChatInterface(
+                chat_translation,
+                # examples=["Spanish", "Italian"],
+                additional_outputs=[translation],
+                type="messages"
+            )
+        with gr.Column():
+            gr.Markdown("<center><h1>Translation</h1></center>")
+            # translation.submit(translate)
+            translation.render()
+            # translation = gr.Textbox(label="Translation", lines=20)
+            # chatbox.submit(translate, inputs=chatbox.textbox, outputs=translation)
+
+    # # Update translation when chat updates
+    # chatbox._submit_btn.click(
+    #     None,  # No separate function, handled by chat
+    #     inputs=None,
+    #     outputs=translation,
+    #     _js="() => [window.gradio_state['chat'].additional_outputs[0]]"  # Extract translation
+    # )
+
+
+demo.launch(debug=True)
+
+# gr.Markdown("<center><h1>Translation</h1></center>")
+# gr.Interface(translate, inputs="Textbox", outputs="text", title="Translation")
+# code.render()
+# gr.Textbox.submit(translate, inputs="Textbox", outputs="text", title="Translation")
+# gr.Interface(translate, inputs="Textbox", outputs="text", title="Translation")
+# gr.Textbox
+# gr.Interface(translate, inputs=chatbox, outputs="text", title="Translation")
+# gr.Interface(translate, inputs="Textbox", outputs="text", title="Translation")
+
+import gradio as gr
+
+def append_text(new_text, current_text):
+    return current_text + "\n" + new_text  # Append with a newline
+
+with gr.Blocks() as demo:
+    textbox = gr.Textbox(label="Output", lines=10)
+    input_box = gr.Textbox(label="Input")
+    input_box.submit(
+        append_text,
+        inputs=[input_box, textbox],  # Pass new input and current textbox value
+        outputs=textbox              # Update textbox with appended result
+    )
+
+demo.launch()
+
+import gradio as gr
+with gr.Blocks() as demo:
+    chatbot = gr.Chatbot()
+    textbox = gr.Textbox()
+    def respond(message, chat_history):
+        chat_history.append([message, f"Echo: {message}"])
+        return "", chat_history
+    textbox.submit(respond, [textbox, chatbot], [textbox, chatbot])
+demo.launch()
+
+import gradio as gr
+
+python_code = """
+def fib(n):
+    if n <= 0:
+        return 0
+    elif n == 1:
+        return 1
+    else:
+        return fib(n-1) + fib(n-2)
+"""
+
+js_code = """
+function fib(n) {
+    if (n <= 0) return 0;
+    if (n === 1) return 1;
+    return fib(n - 1) + fib(n - 2);
+}
+"""
+
+def chat(message, history):
+    if "python" in message.lower():
+        return "Type Python or JavaScript to see the code.", gr.Code(language="python", value=python_code)
+    elif "javascript" in message.lower():
+        return "Type Python or JavaScript to see the code.", gr.Code(language="javascript", value=js_code)
+    else:
+        return "Please ask about Python or JavaScript.", None
+
+with gr.Blocks() as demo:
+    code = gr.Code(render=False)
+    with gr.Row():
+        with gr.Column():
+            gr.Markdown("<center><h1>Write Python or JavaScript</h1></center>")
+            gr.ChatInterface(
+                chat,
+                examples=["Python", "JavaScript"],
+                additional_outputs=[code],
+                type="messages"
+            )
+        with gr.Column():
+            gr.Markdown("<center><h1>Code Artifacts</h1></center>")
+            code.render()
+
+demo.launch()
 
 """# Let's go multi-modal!!
 
